@@ -1,0 +1,104 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: cybersec
+
+## Deployment
+##
+
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: kali-statefulset
+  namespace: cybersec
+spec:
+  serviceName: "kali-statefulset"
+  replicas: 2
+  selector:
+    matchLabels:
+      app: kali-linux
+  template:
+    metadata:
+      labels:
+        app: kali-linux
+    spec:
+      containers:
+      - name: kali-container
+        image: kalilinux/kali-rolling
+        command: ["/bin/bash", "-c", "sleep infinity"]
+        ports:
+        - containerPort: 22
+          name: ssh
+        - containerPort: 3389
+          name: rdp
+        volumeMounts:
+        - mountPath: /root
+          name: shared-storage
+        - mountPath: /home
+          name: shared-storage
+        - mountPath: /usr/ssh
+          name: shared-storage
+        resources:
+          requests:
+            memory: "1Gi"
+            cpu: "1"
+          limits:
+            memory: "1Gi"
+            cpu: "1"
+        lifecycle:
+          postStart:
+            exec:
+              command:
+                - /bin/sh
+                - -c
+                - |
+                  if [ ! -f /etc/ssh/ssh_host_rsa_key ]; then
+                    ssh-keygen -A
+                  fi
+                  apt update -y 
+                  apt install ssh sudo -y 
+                  sed -i 's/#PermitRootLogin prohibit-password/PermitRootLogin yes/' /etc/ssh/sshd_config
+                  service ssh restart 
+                  useradd -m -s /bin/bash kali
+                  echo "kali:kali" | chpasswd
+                  echo "kali ALL = (root) NOPASSWD:ALL" | tee /etc/sudoers.d/kali
+                  chmod 0440 /etc/sudoers.d/kali
+      volumes:
+      - name: shared-storage
+        persistentVolumeClaim:
+          claimName: shared-storage-pvc
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: shared-storage-pvc
+  namespace: cybersec
+spec:
+  accessModes:
+  - ReadWriteMany
+  storageClassName: longhorn
+  resources:
+    requests:
+      storage: 250Gi
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kali-loadbalancer
+  namespace: cybersec
+spec:
+  type: LoadBalancer
+  ports:
+  - name: ssh
+    port: 22           # External port for SSH
+    targetPort: 22     # Pod's container port for SSH
+    protocol: TCP
+  - name: rdp
+    port: 3389         # External port for Remote Desktop (RDP)
+    targetPort: 3389   # Pod's container port for RDP
+    protocol: TCP
+  selector:
+    app: kali-linux
